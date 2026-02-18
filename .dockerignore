@@ -1,0 +1,8 @@
+.env
+.git
+.claude
+tmp_docs/
+__pycache__/
+*.pyc
+.venv/
+venv/
