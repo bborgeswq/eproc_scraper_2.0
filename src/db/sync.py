@@ -37,6 +37,12 @@ async def sync(page: Page, context: BrowserContext):
             print(f"[SYNC] *** MODO TESTE: limite de {Config.PROCESS_LIMIT} processo(s) ***")
 
         # 4. Remover processos que sairam do eProc
+        # Proteção: se eProc retornou 0 processos mas DB tem dados, é provável
+        # erro de navegação — não deletar nada
+        if len(eproc_cnjs_set) == 0 and len(db_cnjs) > 0:
+            print(f"[SYNC] AVISO: eProc retornou 0 processos mas DB tem {len(db_cnjs)}. Pulando remoção (possível erro de navegação).")
+            to_remove = []
+
         for cnj in to_remove:
             print(f"[SYNC] Removendo: {cnj}")
             delete_process_documents(cnj)

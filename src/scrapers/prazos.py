@@ -34,9 +34,20 @@ async def scrape_prazos_abertos(page: Page) -> dict[str, dict]:
     Navega para a tabela de prazos abertos e extrai todos os registros.
     Retorna dict {cnj: dados_do_prazo}.
     """
+    # Voltar ao painel do advogado antes de buscar o link de prazos
+    # (após um sync, a page pode estar em qualquer página do eProc)
+    print("[PRAZOS] Navegando para o painel do advogado...")
+    await page.goto(
+        f"{Config.EPROC_BASE_URL}/eproc/controlador.php?acao=painel_adv_listar",
+        wait_until="networkidle",
+    )
+
     # Navegar para prazos abertos
     print("[PRAZOS] Navegando para prazos abertos...")
     link = page.locator("a[href*='citacao_intimacao_prazo_aberto_listar']").first
+    if await link.count() == 0:
+        print("[PRAZOS] ERRO: Link de prazos abertos não encontrado no painel")
+        return {}
     href = await link.get_attribute("href")
     await page.goto(f"{Config.EPROC_BASE_URL}/eproc/{href}", wait_until="networkidle")
 
