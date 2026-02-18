@@ -17,8 +17,9 @@ CREATE TABLE IF NOT EXISTS prazos_abertos (
 CREATE INDEX IF NOT EXISTS idx_prazos_abertos_processo ON prazos_abertos (processo_id);
 CREATE INDEX IF NOT EXISTS idx_prazos_abertos_final ON prazos_abertos (prazo_final);
 
--- Atualizar view para incluir prazos_abertos
-CREATE OR REPLACE VIEW v_processo_completo AS
+-- Recriar view (DROP necessário porque adicionamos nova coluna 'prazos')
+DROP VIEW IF EXISTS v_processo_completo;
+CREATE VIEW v_processo_completo AS
 SELECT
     p.id AS processo_id,
     p.cnj,
