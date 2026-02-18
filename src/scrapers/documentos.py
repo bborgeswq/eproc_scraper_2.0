@@ -127,8 +127,7 @@ async def download_document(context: BrowserContext, url_eproc: str) -> dict | N
                     await download_btn.first.click()
                 download: Download = await dl_info.value
                 await download.save_as(temp_path)
-                tipo = _detect_type_from_file(temp_path)
-                temp_path = _rename_with_ext(temp_path, temp_id, tipo)
+                temp_path, tipo = _detect_and_rename(temp_path, temp_id)
                 print(f"    [botao download] {tipo}")
                 await doc_page.close()
                 return _build_result(temp_path, tipo)
@@ -182,8 +181,7 @@ async def download_document(context: BrowserContext, url_eproc: str) -> dict | N
                     await doc_links.first.click()
                 download: Download = await dl_info.value
                 await download.save_as(temp_path)
-                tipo = _detect_type_from_file(temp_path)
-                temp_path = _rename_with_ext(temp_path, temp_id, tipo)
+                temp_path, tipo = _detect_and_rename(temp_path, temp_id)
                 print(f"    [link download] {tipo}")
                 await doc_page.close()
                 return _build_result(temp_path, tipo)

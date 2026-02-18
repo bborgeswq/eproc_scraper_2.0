@@ -17,7 +17,7 @@ async def sync(page: Page, context: BrowserContext):
     stats = {"added": 0, "removed": 0, "updated": 0, "docs_uploaded": 0}
 
     try:
-        # 1. Scrapear prazos abertos do eProc (dict ordenado pela tabela)
+        # 1. Scrapear prazos abertos do eProc (dict {cnj: [prazo1, prazo2, ...]})
         eproc = await scrape_prazos_abertos(page)
         eproc_cnjs_ordered = list(eproc.keys())  # Mantém ordem da tabela
         eproc_cnjs_set = set(eproc_cnjs_ordered)
@@ -55,7 +55,7 @@ async def sync(page: Page, context: BrowserContext):
             if Config.PROCESS_LIMIT > 0 and added_count >= Config.PROCESS_LIMIT:
                 print(f"[SYNC] Limite de teste atingido ({Config.PROCESS_LIMIT}), pulando restante")
                 break
-            print(f"\n[SYNC] Adicionando: {cnj}")
+            print(f"\n[SYNC] Adicionando: {cnj} ({len(eproc[cnj])} prazo(s))")
             try:
                 await _add_full_process(context, page, sb, cnj, eproc[cnj], stats)
                 stats["added"] += 1
@@ -71,7 +71,7 @@ async def sync(page: Page, context: BrowserContext):
             if Config.PROCESS_LIMIT > 0 and updated_count >= Config.PROCESS_LIMIT:
                 print(f"[SYNC] Limite de teste atingido ({Config.PROCESS_LIMIT}), pulando restante")
                 break
-            print(f"[SYNC] Atualizando: {cnj}")
+            print(f"[SYNC] Atualizando: {cnj} ({len(eproc[cnj])} prazo(s))")
             try:
                 await _update_process(context, page, sb, cnj, eproc[cnj], stats)
                 stats["updated"] += 1
@@ -103,9 +103,15 @@ async def sync(page: Page, context: BrowserContext):
         raise
 
 
-async def _add_full_process(context, page, sb, cnj, prazo_data, stats):
-    """Scrape completo de um processo e insere tudo na DB."""
-    proc_page = await open_process_page(context, page, prazo_data["proc_href"])
+async def _add_full_process(context, page, sb, cnj, prazos_list, stats):
+    """Scrape completo de um processo e insere tudo na DB.
+    prazos_list: lista de dicts com dados de cada prazo aberto do CNJ."""
+    # Usar o primeiro prazo para navegação e dados básicos
+    first_prazo = prazos_list[0]
+    # Prazo mais urgente (menor prazo_final) para campos legados na tabela processos
+    most_urgent = min(prazos_list, key=lambda p: p.get("prazo_final") or "9999")
+
+    proc_page = await open_process_page(context, page, first_prazo["proc_href"])
 
     try:
         # Extrair header
@@ -119,29 +125,33 @@ async def _add_full_process(context, page, sb, cnj, prazo_data, stats):
         lado = identify_adv_side(partes, Config.ADV_NAME)
 
         # Inserir processo com assuntos e partes como JSONB
+        # Campos prazo_* guardam o prazo mais urgente (retrocompat)
         result = sb.table("processos").upsert({
             "cnj": cnj,
-            "classe": header.get("classe") or prazo_data.get("classe"),
+            "classe": header.get("classe") or first_prazo.get("classe"),
             "competencia": header.get("competencia"),
             "data_autuacao": header.get("data_autuacao"),
             "situacao": header.get("situacao"),
             "orgao_julgador": header.get("orgao_julgador"),
             "juiz": header.get("juiz"),
-            "juizo": prazo_data.get("juizo"),
+            "juizo": first_prazo.get("juizo"),
             "lado_advogado": lado,
             "processos_relacionados": header.get("processos_relacionados", []),
             "assuntos": assuntos,
             "partes": partes,
-            "prazo_evento_descricao": prazo_data.get("evento_descricao"),
-            "prazo_data_envio": prazo_data.get("data_envio"),
-            "prazo_inicio": prazo_data.get("prazo_inicio"),
-            "prazo_final": prazo_data.get("prazo_final"),
+            "prazo_evento_descricao": most_urgent.get("evento_descricao"),
+            "prazo_data_envio": most_urgent.get("data_envio"),
+            "prazo_inicio": most_urgent.get("prazo_inicio"),
+            "prazo_final": most_urgent.get("prazo_final"),
             "last_synced_at": datetime.now(timezone.utc).isoformat(),
         }, on_conflict="cnj").execute()
         processo_id = result.data[0]["id"]
 
+        # Salvar todos os prazos na tabela prazos_abertos
+        _sync_prazos_abertos(sb, processo_id, prazos_list)
+
         print(f"  Processo inserido: {cnj} (id={processo_id})")
-        print(f"  Assuntos: {len(assuntos)} | Partes: {len(partes)} | Lado: {lado or '(não identificado)'}")
+        print(f"  Assuntos: {len(assuntos)} | Partes: {len(partes)} | Lado: {lado or '(não identificado)'} | Prazos: {len(prazos_list)}")
 
         # Eventos + documentos
         eventos = await extract_eventos(proc_page)
@@ -175,21 +185,27 @@ async def _add_full_process(context, page, sb, cnj, prazo_data, stats):
         await proc_page.close()
 
 
-async def _update_process(context, page, sb, cnj, prazo_data, stats):
-    """Atualiza campos de prazo e busca eventos novos."""
+async def _update_process(context, page, sb, cnj, prazos_list, stats):
+    """Atualiza campos de prazo e busca eventos novos.
+    prazos_list: lista de dicts com dados de cada prazo aberto do CNJ."""
     result = sb.table("processos").select("id").eq("cnj", cnj).execute()
     if not result.data:
         return
     processo_id = result.data[0]["id"]
+    first_prazo = prazos_list[0]
+    most_urgent = min(prazos_list, key=lambda p: p.get("prazo_final") or "9999")
 
-    # Atualizar campos de prazo
+    # Atualizar campos de prazo (mais urgente) na tabela processos
     sb.table("processos").update({
-        "prazo_evento_descricao": prazo_data.get("evento_descricao"),
-        "prazo_data_envio": prazo_data.get("data_envio"),
-        "prazo_inicio": prazo_data.get("prazo_inicio"),
-        "prazo_final": prazo_data.get("prazo_final"),
+        "prazo_evento_descricao": most_urgent.get("evento_descricao"),
+        "prazo_data_envio": most_urgent.get("data_envio"),
+        "prazo_inicio": most_urgent.get("prazo_inicio"),
+        "prazo_final": most_urgent.get("prazo_final"),
         "last_synced_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", processo_id).execute()
+
+    # Sincronizar todos os prazos na tabela prazos_abertos
+    _sync_prazos_abertos(sb, processo_id, prazos_list)
 
     # Buscar ultimo evento conhecido
     max_evt = sb.table("eventos") \
@@ -201,7 +217,7 @@ async def _update_process(context, page, sb, cnj, prazo_data, stats):
     last_known = max_evt.data[0]["numero_evento"] if max_evt.data else 0
 
     # Abrir pagina do processo
-    proc_page = await open_process_page(context, page, prazo_data["proc_href"])
+    proc_page = await open_process_page(context, page, first_prazo["proc_href"])
 
     try:
         eventos = await extract_eventos(proc_page)
@@ -234,6 +250,22 @@ async def _update_process(context, page, sb, cnj, prazo_data, stats):
                 )
     finally:
         await proc_page.close()
+
+
+def _sync_prazos_abertos(sb, processo_id: str, prazos_list: list[dict]):
+    """Sincroniza prazos abertos: deleta os antigos e insere os atuais."""
+    # Deletar prazos antigos deste processo
+    sb.table("prazos_abertos").delete().eq("processo_id", processo_id).execute()
+
+    # Inserir todos os prazos atuais
+    for p in prazos_list:
+        sb.table("prazos_abertos").insert({
+            "processo_id": processo_id,
+            "evento_descricao": p.get("evento_descricao", ""),
+            "data_envio": p.get("data_envio"),
+            "prazo_inicio": p.get("prazo_inicio"),
+            "prazo_final": p.get("prazo_final"),
+        }).execute()
 
 
 async def _download_and_upload(context, sb, processo_id, evento_id, num_evento, cnj, doc_info, stats):

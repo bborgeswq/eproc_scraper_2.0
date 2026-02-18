@@ -100,9 +100,53 @@ Cada linha = um processo judicial com prazo em aberto para o advogado logado.
 
 **Tipos de representante:** `Advogado` (OAB), `DPE` (Defensoria Publica)
 
+**Nota:** Os campos `prazo_*` na tabela `processos` guardam o **prazo mais urgente** (menor `prazo_final`). Para ver todos os prazos, use a tabela `prazos_abertos`.
+
 ---
 
-### 2. `eventos` — Movimentacoes do processo
+### 2. `prazos_abertos` — Prazos abertos por processo (N:1)
+
+Cada linha = um prazo aberto. Um processo pode ter **multiplos prazos simultaneos** (ex: intimacao + citacao com datas diferentes).
+
+| Coluna | Tipo | Descricao |
+|--------|------|-----------|
+| `id` | UUID (PK) | ID interno |
+| `processo_id` | UUID (FK -> processos.id) | Processo pai. CASCADE on delete |
+| `evento_descricao` | TEXT | Descricao do evento que gerou o prazo (ex: "Intimacao Eletronica - Expedida/Certificada") |
+| `data_envio` | TIMESTAMPTZ | Data/hora de envio da intimacao |
+| `prazo_inicio` | TIMESTAMPTZ | Inicio da contagem do prazo |
+| `prazo_final` | TIMESTAMPTZ | **Data limite do prazo** (NOT NULL) |
+
+**Constraint:** UNIQUE (processo_id, evento_descricao, prazo_final)
+**Indices:** `processo_id`, `prazo_final`
+
+#### Relacao com processos
+- A tabela `processos` mantem campos `prazo_*` com o **prazo mais urgente** (retrocompatibilidade)
+- A tabela `prazos_abertos` contem **todos** os prazos do processo
+- A cada sync, os prazos antigos sao deletados e os atuais reinseridos
+
+#### Query: Todos os prazos de um processo
+```sql
+SELECT pa.evento_descricao, pa.data_envio, pa.prazo_inicio, pa.prazo_final
+FROM prazos_abertos pa
+JOIN processos p ON pa.processo_id = p.id
+WHERE p.cnj = '5001531-15.2025.8.21.0094'
+ORDER BY pa.prazo_final ASC;
+```
+
+#### Query: Processos com mais de 1 prazo aberto
+```sql
+SELECT p.cnj, COUNT(*) AS total_prazos, MIN(pa.prazo_final) AS prazo_mais_urgente
+FROM prazos_abertos pa
+JOIN processos p ON pa.processo_id = p.id
+GROUP BY p.cnj
+HAVING COUNT(*) > 1
+ORDER BY prazo_mais_urgente ASC;
+```
+
+---
+
+### 3. `eventos` — Movimentacoes do processo
 
 Cada linha = um evento/movimentacao processual. Ordenados por `numero_evento` (crescente = mais antigo primeiro).
 
@@ -139,7 +183,7 @@ Peticao - Refer. ao Evento 34
 
 ---
 
-### 3. `documentos` — Arquivos anexados aos eventos
+### 4. `documentos` — Arquivos anexados aos eventos
 
 Cada linha = um documento (PDF, imagem, video, audio) vinculado a um evento. Os arquivos estao no Supabase Storage.
 
@@ -213,7 +257,7 @@ process-documents/
 
 ---
 
-### 4. `sync_log` — Log de execucao do sync
+### 5. `sync_log` — Log de execucao do sync
 
 Cada linha = uma execucao do algoritmo de sync. Util para monitoramento e debug.
 
@@ -257,10 +301,32 @@ SELECT * FROM v_processo_completo WHERE prazo_final < NOW() + INTERVAL '3 days';
 | `assuntos` | JSONB | processos.assuntos |
 | `partes` | JSONB | processos.partes |
 | `prazo_evento_descricao` | TEXT | processos.prazo_evento_descricao |
-| `prazo_inicio` | TIMESTAMPTZ | processos.prazo_inicio |
-| `prazo_final` | TIMESTAMPTZ | processos.prazo_final |
+| `prazo_inicio` | TIMESTAMPTZ | processos.prazo_inicio (mais urgente) |
+| `prazo_final` | TIMESTAMPTZ | processos.prazo_final (mais urgente) |
 | `last_synced_at` | TIMESTAMPTZ | processos.last_synced_at |
+| `prazos` | JSON | Subquery agregada de prazos_abertos (ver abaixo) |
 | `eventos` | JSON | Subquery agregada (ver abaixo) |
+
+### Estrutura da coluna `prazos` (JSON agregado)
+
+```json
+[
+  {
+    "evento_descricao": "Intimacao Eletronica - Expedida/Certificada",
+    "data_envio": "2026-02-06T09:09:00-03:00",
+    "prazo_inicio": "2026-02-11T00:00:00-03:00",
+    "prazo_final": "2026-02-19T23:59:59-03:00"
+  },
+  {
+    "evento_descricao": "Citacao - Prazo para Contestar",
+    "data_envio": "2026-02-10T14:00:00-03:00",
+    "prazo_inicio": "2026-02-12T00:00:00-03:00",
+    "prazo_final": "2026-02-27T23:59:59-03:00"
+  }
+]
+```
+
+Os prazos vem ordenados por `prazo_final ASC` (mais urgente primeiro).
 
 ### Estrutura da coluna `eventos` (JSON agregado)
 ```json
@@ -356,6 +422,17 @@ GROUP BY classe
 ORDER BY total DESC;
 ```
 
+### Prazos abertos vencendo nos proximos 3 dias (todos, nao apenas o mais urgente)
+
+```sql
+SELECT p.cnj, p.classe, pa.evento_descricao, pa.prazo_final,
+       pa.prazo_final - NOW() AS tempo_restante
+FROM prazos_abertos pa
+JOIN processos p ON pa.processo_id = p.id
+WHERE pa.prazo_final BETWEEN NOW() AND NOW() + INTERVAL '3 days'
+ORDER BY pa.prazo_final ASC;
+```
+
 ### Eventos urgentes
 ```sql
 SELECT p.cnj, e.numero_evento, e.data_hora, e.descricao
@@ -405,6 +482,7 @@ O Supabase expoe automaticamente uma API REST para todas as tabelas e views:
 ```
 GET  {SUPABASE_URL}/rest/v1/processos?select=*
 GET  {SUPABASE_URL}/rest/v1/v_processo_completo?select=*
+GET  {SUPABASE_URL}/rest/v1/prazos_abertos?processo_id=eq.{UUID}
 GET  {SUPABASE_URL}/rest/v1/eventos?processo_id=eq.{UUID}
 GET  {SUPABASE_URL}/rest/v1/documentos?processo_id=eq.{UUID}
 GET  {SUPABASE_URL}/rest/v1/sync_log?order=started_at.desc&limit=1
@@ -433,17 +511,19 @@ processos = sb.table("processos").select("*").execute().data
 3. Extrai assuntos (JSONB)
 4. Extrai partes e advogados (JSONB)
 5. Identifica lado do advogado (AUTOR/REU)
-6. UPSERT no `processos` (ON CONFLICT cnj)
-7. Extrai todos os eventos
-8. UPSERT cada evento (ON CONFLICT processo_id, numero_evento)
-9. Para cada documento de cada evento: download + upload Storage + UPSERT documentos
+6. UPSERT no `processos` (ON CONFLICT cnj) — campos `prazo_*` = prazo mais urgente
+7. Sincroniza `prazos_abertos` (deleta antigos + insere todos os atuais)
+8. Extrai todos os eventos
+9. UPSERT cada evento (ON CONFLICT processo_id, numero_evento)
+10. Para cada documento de cada evento: download + upload Storage + UPSERT documentos
 
 ### Atualizacao (processo existente)
-1. Atualiza campos de prazo no `processos` (prazo_evento_descricao, prazo_data_envio, prazo_inicio, prazo_final)
-2. Abre pagina do processo
-3. Extrai eventos
-4. Filtra apenas eventos novos (numero > ultimo conhecido)
-5. UPSERT eventos novos + download documentos novos
+1. Atualiza campos de prazo no `processos` (prazo mais urgente)
+2. Sincroniza `prazos_abertos` (deleta antigos + insere todos os atuais)
+3. Abre pagina do processo
+4. Extrai eventos
+5. Filtra apenas eventos novos (numero > ultimo conhecido)
+6. UPSERT eventos novos + download documentos novos
 
 ### Remocao (processo sumiu do eProc)
 1. Significa que o prazo foi respondido ou expirou

@@ -29,10 +29,10 @@ def _extract_cnj(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-async def scrape_prazos_abertos(page: Page) -> dict[str, dict]:
+async def scrape_prazos_abertos(page: Page) -> dict[str, list[dict]]:
     """
     Navega para a tabela de prazos abertos e extrai todos os registros.
-    Retorna dict {cnj: dados_do_prazo}.
+    Retorna dict {cnj: [prazo1, prazo2, ...]} — um CNJ pode ter N prazos.
     """
     # Voltar ao painel do advogado antes de buscar o link de prazos
     # (após um sync, a page pode estar em qualquer página do eProc)
@@ -135,7 +135,7 @@ async def scrape_prazos_abertos(page: Page) -> dict[str, dict]:
             if await proc_link.count() > 0:
                 proc_href = await proc_link.first.get_attribute("href") or ""
 
-            processos[cnj] = {
+            prazo_entry = {
                 "cnj": cnj,
                 "classe": classe,
                 "assunto": assunto,
@@ -148,9 +148,14 @@ async def scrape_prazos_abertos(page: Page) -> dict[str, dict]:
                 "partes_raw": partes_raw,
             }
 
+            if cnj not in processos:
+                processos[cnj] = []
+            processos[cnj].append(prazo_entry)
+
         except Exception as e:
             print(f"[PRAZOS] Erro ao processar linha {i}: {e}")
             continue
 
-    print(f"[PRAZOS] {len(processos)} processos extraidos")
+    total_prazos = sum(len(v) for v in processos.values())
+    print(f"[PRAZOS] {len(processos)} processos extraidos ({total_prazos} prazos no total)")
     return processos
