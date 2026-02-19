@@ -296,8 +296,20 @@ async def extract_eventos(page: Page) -> list[dict]:
             if not data_hora:
                 continue
 
-            # Coluna 2: Descrição
-            descricao = (await cells.nth(2).text_content() or "").strip()
+            # Coluna 2: Descrição + detecção de prazo aberto (fundo amarelo)
+            desc_cell = cells.nth(2)
+            descricao = (await desc_cell.text_content() or "").strip()
+
+            # Detectar prazo aberto pela cor de fundo amarela da célula
+            bg_color = await desc_cell.evaluate(
+                "el => getComputedStyle(el).backgroundColor"
+            )
+            prazo_aberto_visual = (
+                "yellow" in (bg_color or "").lower()
+                or "rgb(255, 255, 0" in (bg_color or "")
+                or "rgb(255, 255, 1" in (bg_color or "")
+                or "rgb(255, 255, 2" in (bg_color or "")
+            )
 
             # Coluna 3: Usuário
             usuario = (await cells.nth(3).text_content() or "").strip()
@@ -317,8 +329,8 @@ async def extract_eventos(page: Page) -> list[dict]:
                             "url_eproc": doc_href,
                         })
 
-            # Detectar se é evento de prazo
-            tem_prazo = "Prazo:" in descricao and "Status:" in descricao
+            # Detectar se é evento de prazo (por texto, complementar à cor)
+            tem_prazo_texto = "Prazo:" in descricao and "Status:" in descricao
             prazo_dias = None
             prazo_status = None
             prazo_data_inicial = None
@@ -326,7 +338,7 @@ async def extract_eventos(page: Page) -> list[dict]:
             evento_referencia = None
             urgente = "URGENTE" in descricao
 
-            if tem_prazo:
+            if tem_prazo_texto:
                 # Prazo: 5 dias
                 dias_match = re.search(r"Prazo:\s*(\d+)\s*dias?", descricao)
                 if dias_match:
@@ -363,7 +375,7 @@ async def extract_eventos(page: Page) -> list[dict]:
                 "data_hora": data_hora.isoformat(),
                 "descricao": descricao,
                 "usuario": usuario,
-                "tem_prazo": tem_prazo,
+                "prazo_aberto": prazo_aberto_visual,
                 "prazo_dias": prazo_dias,
                 "prazo_status": prazo_status,
                 "prazo_data_inicial": prazo_data_inicial.isoformat() if prazo_data_inicial else None,

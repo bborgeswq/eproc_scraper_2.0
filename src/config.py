@@ -11,7 +11,6 @@ class Config:
     TOTP_SECRET = os.getenv("TOTP_SECRET", "")
     ADV_NAME = os.getenv("ADV_NAME", "")
     HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
-    PROCESS_LIMIT = int(os.getenv("PROCESS_LIMIT", "0"))
 
     EPROC_BASE_URL = "https://eproc1g.tjrs.jus.br"
     EPROC_LOGIN_URL = f"{EPROC_BASE_URL}/eproc/externo_controlador.php?acao=SSO%2Flogin"

@@ -25,7 +25,6 @@ RUN mkdir -p /app/tmp_docs
 
 # Variáveis de ambiente padrão para produção
 ENV HEADLESS=true
-ENV PROCESS_LIMIT=1
 ENV TEMP_DIR=/app/tmp_docs
 ENV PYTHONUNBUFFERED=1
 
