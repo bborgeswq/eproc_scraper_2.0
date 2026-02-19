@@ -253,6 +253,19 @@ def identify_adv_side(partes: list[dict], adv_name: str) -> str:
     return ""
 
 
+def _is_yellow(bg_color: str) -> bool:
+    """Verifica se uma cor de fundo é amarela."""
+    if not bg_color:
+        return False
+    bg = bg_color.lower()
+    return (
+        "yellow" in bg
+        or "rgb(255, 255, 0" in bg
+        or "rgb(255, 255, 1" in bg
+        or "rgb(255, 255, 2" in bg
+    )
+
+
 async def extract_eventos(page: Page) -> list[dict]:
     """Extrai todos os eventos da tabela de eventos."""
     eventos = []
@@ -300,16 +313,17 @@ async def extract_eventos(page: Page) -> list[dict]:
             desc_cell = cells.nth(2)
             descricao = (await desc_cell.text_content() or "").strip()
 
-            # Detectar prazo aberto pela cor de fundo amarela da célula
-            bg_color = await desc_cell.evaluate(
+            # Detectar prazo aberto: APENAS a célula de descrição é amarela
+            # (linha inteira amarela = outro significado, não é prazo aberto)
+            desc_bg = await desc_cell.evaluate(
                 "el => getComputedStyle(el).backgroundColor"
             )
-            prazo_aberto_visual = (
-                "yellow" in (bg_color or "").lower()
-                or "rgb(255, 255, 0" in (bg_color or "")
-                or "rgb(255, 255, 1" in (bg_color or "")
-                or "rgb(255, 255, 2" in (bg_color or "")
+            row_bg = await cells.nth(0).evaluate(
+                "el => getComputedStyle(el).backgroundColor"
             )
+            desc_is_yellow = _is_yellow(desc_bg)
+            row_is_yellow = _is_yellow(row_bg)
+            prazo_aberto_visual = desc_is_yellow and not row_is_yellow
 
             # Coluna 3: Usuário
             usuario = (await cells.nth(3).text_content() or "").strip()

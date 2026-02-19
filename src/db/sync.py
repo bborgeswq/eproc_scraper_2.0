@@ -52,9 +52,14 @@ async def sync(page: Page, context: BrowserContext):
                 "last_synced_at": datetime.now(timezone.utc).isoformat(),
             }, on_conflict="cnj").execute()
 
-            # Sync prazos_abertos
+            # Sync prazos_abertos (upsert para evitar duplicatas)
             sb.table("prazos_abertos").delete().eq("cnj", cnj).execute()
+            seen_prazos = set()
             for p in prazos_list:
+                key = (p.get("evento_descricao", ""), p.get("prazo_final"))
+                if key in seen_prazos:
+                    continue  # Pular duplicatas (mesma descrição + prazo_final)
+                seen_prazos.add(key)
                 sb.table("prazos_abertos").insert({
                     "cnj": cnj,
                     "evento_descricao": p.get("evento_descricao", ""),
